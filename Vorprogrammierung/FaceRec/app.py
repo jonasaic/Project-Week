@@ -14,6 +14,9 @@ engine = pyttsx3.init()
 KNOWN_FACES_DIR = "known_faces"
 OUTPUT_FILE = "erkannt_log.txt"
 
+#Leckmer die aier du hs
+
+
 # Lade bekannte Gesichter
 known_encodings = []
 known_names = []
