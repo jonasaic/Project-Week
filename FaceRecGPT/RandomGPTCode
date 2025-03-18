@@ -1,0 +1,124 @@
+#Das ist Chatgpt code noch nicht kontrolliert/optimiert muss noch getestet werden 
+import sys
+import time
+import cv2
+import os
+import face_recognition
+import pyttsx3
+import threading
+from datetime import datetime, timedelta
+
+# Text-to-Speech Engine starten
+engine = pyttsx3.init()
+
+# Kameras initialisieren (5 Kameras)
+CAMERA_IDS = [0, 1, 2, 3, 4]  # Passe diese IDs an deine Hardware an
+video_captures = [cv2.VideoCapture(cam_id) for cam_id in CAMERA_IDS]
+
+# Pfad für bekannte Gesichter
+KNOWN_FACES_DIR = "known_faces"
+LOG_FILE = "erkannt_log.txt"
+LOG_RETENTION_DAYS = 7  # Logs älter als 7 Tage werden gelöscht
+
+# Lade bekannte Gesichter mit Komprimierung zur Speicheroptimierung
+known_encodings = []
+known_names = []
+print("Lade bekannte Gesichter...")
+for filename in os.listdir(KNOWN_FACES_DIR):
+    if filename.endswith(('.jpg', '.jpeg')):  # PNGs vermeiden, da sie größer sind
+        image_path = os.path.join(KNOWN_FACES_DIR, filename)
+        image = face_recognition.load_image_file(image_path)
+        encodings = face_recognition.face_encodings(image)
+        if encodings:
+            known_encodings.append(encodings[0])
+            name = os.path.splitext(filename)[0]
+            known_names.append(name)
+print("Gesichter geladen!")
+
+# Erkennungs-Tracker
+recognized_status = {}
+FORGET_TIME = timedelta(seconds=30)
+CHECK_INTERVAL = timedelta(seconds=2)
+last_check_time = datetime.now()
+
+# Funktion für Begrüßung je nach Tageszeit
+def get_greeting():
+    current_hour = datetime.now().hour
+    if 5 <= current_hour < 12:
+        return "Good morning"
+    elif 12 <= current_hour < 18:
+        return "Good day"
+    else:
+        return "Good evening"
+
+# Text-to-Speech mit Threading für parallele Ausgabe
+def speak(text):
+    def _speak():
+        engine.say(text)
+        engine.runAndWait()
+    threading.Thread(target=_speak, daemon=True).start()
+
+# Log-Datei bereinigen (alte Logs löschen)
+def clean_logs():
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r") as file:
+            lines = file.readlines()
+        now = datetime.now()
+        with open(LOG_FILE, "w") as file:
+            for line in lines:
+                try:
+                    timestamp = datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+                    if now - timestamp < timedelta(days=LOG_RETENTION_DAYS):
+                        file.write(line)  # Nur neue Logs behalten
+                except ValueError:
+                    continue  # Falls Zeile fehlerhaft ist, ignorieren
+
+clean_logs()
+
+# Hauptlogik
+while True:
+    current_time = datetime.now()
+    
+    if current_time - last_check_time >= CHECK_INTERVAL:
+        last_check_time = current_time
+        currently_seen = set()
+        
+        for cap in video_captures:
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_frame)
+            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+            
+            for face_encoding in face_encodings:
+                matches = face_recognition.compare_faces(known_encodings, face_encoding)
+                name = "Unknown"
+                
+                if True in matches:
+                    match_index = matches.index(True)
+                    name = known_names[match_index]
+                    recognized_status[name] = {'status': 'im Raum', 'last_seen': current_time}
+                
+                currently_seen.add(name)
+
+        filtered_seen = list(currently_seen)
+        
+        new_people = [name for name in filtered_seen if name not in recognized_status]
+        if new_people:
+            greeting = get_greeting()
+            names_str = " and ".join(new_people) if len(new_people) < 3 else ", ".join(new_people[:-1]) + " and " + new_people[-1]
+            speak(f"{greeting}, {names_str}. How are you today?")
+        
+        for name, info in list(recognized_status.items()):
+            if current_time - info['last_seen'] >= FORGET_TIME:
+                del recognized_status[name]
+                print(f"{name} hat den Raum verlassen")
+    
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break
+
+for cap in video_captures:
+    cap.release()
+cv2.destroyAllWindows()
